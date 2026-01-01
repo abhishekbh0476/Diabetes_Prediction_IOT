@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Health Monitor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen p-4 sm:p-6">
+  <div class="max-w-4xl mx-auto">
+
+    <!-- Header -->
+    <div class="bg-white rounded-2xl shadow-lg p-6 mb-6 flex justify-between items-center">
+      <div>
+        <h1 class="text-2xl font-bold text-gray-800">AI Health Monitor</h1>
+        <p class="text-sm text-gray-500">ESP32 + AI Glucose Monitoring</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <div id="connectionStatus" class="hidden items-center gap-2 text-green-600 text-sm">
+          <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div> Connected
+        </div>
+        <button id="connectBtn" class="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">Connect</button>
+        <button id="disconnectBtn" class="hidden px-6 py-3 bg-red-500 text-white rounded-lg hover:bg-red-600">Disconnect</button>
+      </div>
+    </div>
+
+    <!-- Sensor Data -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+      <div class="bg-white rounded-2xl shadow-lg p-6">
+        <h3>SpO₂</h3>
+        <div id="spo2Value" class="text-4xl font-bold text-gray-400">--%</div>
+      </div>
+
+      <div class="bg-white rounded-2xl shadow-lg p-6">
+        <h3>Heart Rate</h3>
+        <div id="hrValue" class="text-4xl font-bold text-gray-400">-- bpm</div>
+      </div>
+
+      <div class="bg-white rounded-2xl shadow-lg p-6">
+        <h3>GSR</h3>
+        <div id="gsrValue" class="text-4xl font-bold text-gray-400">-- V</div>
+      </div>
+
+      <div class="bg-white rounded-2xl shadow-lg p-6">
+        <h3>Predicted Glucose</h3>
+        <div id="glucosePrediction" class="text-3xl font-bold text-gray-400">-- mg/dL</div>
+      </div>
+    </div>
+
+    <!-- Retake Button -->
+    <div class="text-center">
+      <button id="retakeBtn" class="hidden px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+        Retake Measurement
+      </button>
+    </div>
+
+  </div>
+
+  <script>
+    let device, characteristic;
+
+    const spo2Value = document.getElementById("spo2Value");
+    const hrValue = document.getElementById("hrValue");
+    const gsrValue = document.getElementById("gsrValue");
+    const glucoseDiv = document.getElementById("glucosePrediction");
+    const retakeBtn = document.getElementById("retakeBtn");
+
+    document.getElementById("connectBtn").onclick = connectToDevice;
+    document.getElementById("disconnectBtn").onclick = disconnect;
+    retakeBtn.onclick = resetValues;
+
+    async function connectToDevice() {
+      device = await navigator.bluetooth.requestDevice({
+        filters: [{ name: "ESP32 Health Monitor" }],
+        optionalServices: ["6e400001-b5a3-f393-e0a9-e50e24dcca9e"]
+      });
+
+      const server = await device.gatt.connect();
+      const service = await server.getPrimaryService("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
+      characteristic = await service.getCharacteristic("6e400002-b5a3-f393-e0a9-e50e24dcca9e");
+
+      await characteristic.startNotifications();
+      characteristic.addEventListener("characteristicvaluechanged", handleData);
+
+      document.getElementById("connectionStatus").classList.remove("hidden");
+      retakeBtn.classList.remove("hidden");
+    }
+
+    function disconnect() {
+      if (device && device.gatt.connected) device.gatt.disconnect();
+    }
+
+    async function handleData(event) {
+      const data = new TextDecoder().decode(event.target.value);
+
+      const hr = parseFloat((data.match(/Heart Rate:(\d+)/) || [])[1]);
+      const spo2 = parseFloat((data.match(/SpO2:(\d+)%/) || [])[1]);
+      const gsr = parseFloat((data.match(/GSR:([\d.]+)/) || [])[1]);
+
+      if (!isNaN(hr) && hr < 160) hrValue.textContent = hr + " bpm";
+      if (!isNaN(spo2)) spo2Value.textContent = spo2 + "%";
+      if (!isNaN(gsr)) gsrValue.textContent = gsr.toFixed(2) + " V";
+
+      if (!isNaN(hr) && !isNaN(spo2) && !isNaN(gsr)) {
+        const res = await fetch("http://127.0.0.1:8000/predict", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ HeartRate: hr, SpO2: spo2, GSR: gsr })
+        });
+
+        const result = await res.json();
+        glucoseDiv.textContent = result["Predicted Glucose (mg/dL)"] + " mg/dL";
+      }
+    }
+
+    function resetValues() {
+      spo2Value.textContent = "--%";
+      hrValue.textContent = "-- bpm";
+      gsrValue.textContent = "-- V";
+      glucoseDiv.textContent = "-- mg/dL";
+    }
+  </script>
+
+</body>
+</html>
